@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HELMSMAN — Chart Plotter</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --chrome:#0A1620;        /* deep sea steel */
+  --cell:#101F2B;          /* instrument cell */
+  --line:#1D3140;          /* bezel line */
+  --data:#EAF4F8;          /* primary data */
+  --label:#6E8899;         /* slate labels */
+  --cyan:#35C4DC;          /* GPS / active */
+  --gold:#F5B84C;          /* route */
+  --red:#FF4F58;           /* alarm / MOB */
+  --green:#4CD98A;         /* ok / track */
+}
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:var(--chrome);font-family:'Barlow Condensed',system-ui,sans-serif}
+#map{position:absolute;inset:0;z-index:1;background:#0d1b26}
+.mono{font-family:'IBM Plex Mono',ui-monospace,monospace}
+
+/* ---------- top status strip ---------- */
+#topbar{position:absolute;top:0;left:0;right:0;z-index:900;display:flex;align-items:center;gap:10px;
+  padding:calc(env(safe-area-inset-top) + 6px) 12px 6px;background:linear-gradient(180deg,rgba(10,22,32,.92),rgba(10,22,32,.75) 70%,transparent);pointer-events:none}
+#brand{font-weight:700;letter-spacing:.22em;font-size:14px;color:var(--data)}
+#brand span{color:var(--cyan)}
+#fix{display:flex;align-items:center;gap:6px;font-size:12px;letter-spacing:.14em;color:var(--label);text-transform:uppercase}
+#fixdot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 6px currentColor}
+#fixdot.ok{background:var(--green)}
+#fixdot.wait{background:var(--gold);animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.3}}
+#clock{margin-left:auto;font-size:13px;color:var(--label)}
+
+/* ---------- instrument bar ---------- */
+#instr{position:absolute;left:0;right:0;bottom:0;z-index:900;display:grid;grid-template-columns:1fr 1fr 1.5fr;
+  gap:1px;background:var(--line);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom)}
+.cell{background:var(--cell);padding:8px 10px 10px;text-align:center}
+.cell .lab{font-size:11px;letter-spacing:.2em;color:var(--label);text-transform:uppercase}
+.cell .val{font-size:30px;font-weight:700;color:var(--data);line-height:1.05;font-family:'IBM Plex Mono',monospace}
+.cell .unit{font-size:12px;color:var(--label);letter-spacing:.1em}
+.cell .val.sm{font-size:15px;line-height:1.35}
+
+/* ---------- right rail ---------- */
+#rail{position:absolute;right:10px;top:50%;transform:translateY(-58%);z-index:900;display:flex;flex-direction:column;gap:10px}
+.rbtn{width:52px;height:52px;border-radius:12px;border:1px solid var(--line);background:rgba(16,31,43,.94);
+  color:var(--data);display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;user-select:none}
+.rbtn:active{transform:scale(.94)}
+.rbtn.on{border-color:var(--cyan);color:var(--cyan);box-shadow:0 0 10px rgba(53,196,220,.35)}
+.rbtn.mob{border-color:var(--red);color:var(--red);font-weight:700;font-size:15px;letter-spacing:.08em}
+
+/* ---------- mode chips ---------- */
+#modes{position:absolute;left:10px;bottom:86px;z-index:900;display:flex;flex-direction:column;gap:8px}
+.chip{padding:11px 16px;border-radius:24px;border:1px solid var(--line);background:rgba(16,31,43,.94);
+  color:var(--data);font-size:15px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;user-select:none;display:flex;gap:8px;align-items:center}
+.chip .dot{width:9px;height:9px;border-radius:50%;background:var(--label)}
+.chip.route.on{border-color:var(--gold);color:var(--gold)}.chip.route.on .dot{background:var(--gold)}
+.chip.track.on{border-color:var(--green);color:var(--green)}.chip.track.on .dot{background:var(--green)}
+.chip.anchor.on{border-color:var(--red);color:var(--red)}.chip.anchor.on .dot{background:var(--red)}
+
+/* ---------- panels ---------- */
+.panel{position:absolute;left:10px;right:72px;bottom:86px;z-index:950;background:rgba(10,22,32,.96);
+  border:1px solid var(--line);border-radius:14px;padding:14px;display:none;max-height:46vh;overflow-y:auto}
+.panel.open{display:block}
+.panel h3{font-size:13px;letter-spacing:.22em;text-transform:uppercase;color:var(--label);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.panel h3 b{color:var(--data)}
+.x{color:var(--label);font-size:20px;cursor:pointer;padding:0 4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.btn{padding:9px 14px;border-radius:9px;border:1px solid var(--line);background:var(--cell);color:var(--data);
+  font-family:inherit;font-size:14px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;cursor:pointer}
+.btn.gold{border-color:var(--gold);color:var(--gold)}
+.btn.red{border-color:var(--red);color:var(--red)}
+.btn.cyan{border-color:var(--cyan);color:var(--cyan)}
+.stat{display:flex;justify-content:space-between;font-size:15px;color:var(--data);padding:5px 0;border-bottom:1px dashed var(--line)}
+.stat span:first-child{color:var(--label);letter-spacing:.1em;text-transform:uppercase;font-size:13px}
+input[type=number],input[type=text]{background:var(--cell);border:1px solid var(--line);border-radius:8px;color:var(--data);
+  padding:8px 10px;font-family:'IBM Plex Mono',monospace;font-size:15px;width:90px}
+input[type=text]{width:150px}
+input[type=range]{flex:1;accent-color:var(--red)}
+.leglist{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--label);margin-top:8px;line-height:1.7}
+.leglist b{color:var(--gold)}
+.saved{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed var(--line);font-size:15px;color:var(--data)}
+.saved .mini{display:flex;gap:6px}
+.saved .mini button{background:none;border:1px solid var(--line);border-radius:7px;color:var(--label);padding:4px 9px;font-size:12px;cursor:pointer}
+
+/* ---------- alarm flash ---------- */
+#alarmflash{position:absolute;inset:0;z-index:2000;background:rgba(255,79,88,.28);display:none;pointer-events:none;animation:pulse .5s infinite}
+#toast{position:absolute;top:64px;left:50%;transform:translateX(-50%);z-index:2100;background:rgba(10,22,32,.96);
+  border:1px solid var(--line);color:var(--data);padding:10px 18px;border-radius:10px;font-size:15px;display:none;max-width:88%;text-align:center}
+
+/* ---------- boat & marks ---------- */
+.boaticon svg{filter:drop-shadow(0 0 4px rgba(53,196,220,.7))}
+.wpicon{background:var(--gold);border:2px solid #0A1620;border-radius:50%;width:100%;height:100%;
+  color:#0A1620;font:700 11px/16px 'IBM Plex Mono',monospace;text-align:center}
+.mobicon{background:var(--red);border:2px solid #fff;border-radius:50%;width:100%;height:100%;animation:pulse 1s infinite}
+
+/* ---------- night mode: red-on-black helm vision ---------- */
+body.night .leaflet-tile{filter:brightness(.38) sepia(.9) hue-rotate(-48deg) saturate(3.2)}
+body.night{--data:#FF7B72;--label:#8f3f3c;--cyan:#FF7B72;--gold:#FF7B72;--green:#FF7B72}
+body.night .rbtn,body.night .chip,body.night .cell{color:var(--data)}
+
+.leaflet-control-attribution{background:rgba(10,22,32,.7)!important;color:#4d6675!important;font-size:9px!important}
+.leaflet-control-attribution a{color:#4d6675!important}
+.leaflet-bar a{background:var(--cell)!important;color:var(--data)!important;border-color:var(--line)!important}
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--cell);color:var(--data)}
+.leaflet-popup-content{font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.6}
+</style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div id="topbar">
+  <div id="brand">HELMS<span>MAN</span></div>
+  <div id="fix"><div id="fixdot" class="wait"></div><span id="fixtxt">Acquiring GPS</span></div>
+  <div id="clock" class="mono">--:--</div>
+</div>
+
+<div id="rail">
+  <div class="rbtn mob" id="btnMob" title="Man overboard">MOB</div>
+  <div class="rbtn" id="btnLoc" title="Centre on boat">◎</div>
+  <div class="rbtn" id="btnLayers" title="Charts">▤</div>
+  <div class="rbtn" id="btnNight" title="Night vision">☾</div>
+</div>
+
+<div id="modes">
+  <div class="chip route" id="chipRoute"><div class="dot"></div>Route</div>
+  <div class="chip track" id="chipTrack"><div class="dot"></div>Track</div>
+  <div class="chip anchor" id="chipAnchor"><div class="dot"></div>Anchor</div>
+</div>
+
+<!-- ROUTE PANEL -->
+<div class="panel" id="pRoute">
+  <h3><b>Route plan</b><span class="x" data-close="pRoute">✕</span></h3>
+  <div class="stat"><span>Distance</span><span class="mono" id="rDist">0.0 NM</span></div>
+  <div class="stat"><span>ETA @ <input type="number" id="rSpd" value="18" min="1" max="60" style="width:58px"> kn</span><span class="mono" id="rEta">—</span></div>
+  <div class="leglist" id="rLegs">Tap the chart to drop waypoints. Drag to adjust.</div>
+  <div class="row">
+    <button class="btn" id="rUndo">Undo</button>
+    <button class="btn red" id="rClear">Clear</button>
+    <button class="btn gold" id="rSave">Save route</button>
+    <button class="btn cyan" id="rLoad">Saved routes</button>
+  </div>
+  <div id="rSaveRow" class="row" style="display:none">
+    <input type="text" id="rName" placeholder="Route name">
+    <button class="btn gold" id="rSaveGo">Save</button>
+  </div>
+  <div id="rSavedList" style="display:none;margin-top:8px"></div>
+</div>
+
+<!-- ANCHOR PANEL -->
+<div class="panel" id="pAnchor">
+  <h3><b>Anchor watch</b><span class="x" data-close="pAnchor">✕</span></h3>
+  <div class="stat"><span>Swing radius</span><span class="mono" id="aRadTxt">40 m</span></div>
+  <div class="row"><input type="range" id="aRad" min="15" max="150" value="40"></div>
+  <div class="stat"><span>Drift from anchor</span><span class="mono" id="aDrift">—</span></div>
+  <div class="row">
+    <button class="btn cyan" id="aSet">Drop anchor here</button>
+    <button class="btn red" id="aOff">Stop watch</button>
+  </div>
+</div>
+
+<!-- LAYERS PANEL -->
+<div class="panel" id="pLayers">
+  <h3><b>Charts</b><span class="x" data-close="pLayers">✕</span></h3>
+  <div class="row">
+    <button class="btn cyan" id="lChart">Chart + seamarks</button>
+    <button class="btn" id="lSat">Satellite + seamarks</button>
+  </div>
+  <div class="leglist">Seamarks layer: buoys, lights, beacons and channel marks from OpenSeaMap. Not for primary navigation — carry paper charts.</div>
+</div>
+
+<!-- MOB PANEL -->
+<div class="panel" id="pMob" style="border-color:var(--red)">
+  <h3><b style="color:var(--red)">Man overboard</b><span class="x" data-close="pMob">✕</span></h3>
+  <div class="stat"><span>Marked at</span><span class="mono" id="mTime">—</span></div>
+  <div class="stat"><span>Range</span><span class="mono" id="mRange">—</span></div>
+  <div class="stat"><span>Bearing to MOB</span><span class="mono" id="mBrg">—</span></div>
+  <div class="row"><button class="btn red" id="mClear">Clear MOB</button></div>
+</div>
+
+<div id="instr">
+  <div class="cell"><div class="lab">SOG</div><div class="val" id="iSog">--.-</div><div class="unit">KN</div></div>
+  <div class="cell"><div class="lab">COG</div><div class="val" id="iCog">---°</div><div class="unit">TRUE</div></div>
+  <div class="cell"><div class="lab">Position</div><div class="val sm mono" id="iPos">NO FIX<br>&nbsp;</div></div>
+</div>
+
+<div id="alarmflash"></div>
+<div id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* ================= helpers ================= */
+const $=id=>document.getElementById(id);
+const R=6371000;
+function distM(a,b){const dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.lng-a.lng)*Math.PI/180;
+  const s=Math.sin(dLat/2)**2+Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLon/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));}
+const distNM=(a,b)=>distM(a,b)/1852;
+function brg(a,b){const φ1=a.lat*Math.PI/180,φ2=b.lat*Math.PI/180,Δλ=(b.lng-a.lng)*Math.PI/180;
+  const y=Math.sin(Δλ)*Math.cos(φ2),x=Math.cos(φ1)*Math.sin(φ2)-Math.sin(φ1)*Math.cos(φ2)*Math.cos(Δλ);
+  return ((Math.atan2(y,x)*180/Math.PI)+360)%360;}
+function fmtPos(lat,lng){
+  const f=(v,pos,neg)=>{const h=v>=0?pos:neg;v=Math.abs(v);const d=Math.floor(v);const m=(v-d)*60;
+    return `${String(d).padStart(2,'0')}°${m.toFixed(3).padStart(6,'0')}'${h}`;}
+  return [f(lat,'N','S'),f(lng,'E','W')];}
+const fmtBrg=b=>String(Math.round(b)).padStart(3,'0')+'°';
+let toastT;function toast(m,ms=2600){const t=$('toast');t.textContent=m;t.style.display='block';
+  clearTimeout(toastT);toastT=setTimeout(()=>t.style.display='none',ms);}
+async function store(k,v){try{await window.storage.set(k,JSON.stringify(v))}catch(e){}}
+async function load(k){try{const r=await window.storage.get(k);return r?JSON.parse(r.value):null}catch(e){return null}}
+
+/* ================= map ================= */
+const map=L.map('map',{zoomControl:false,attributionControl:true}).setView([51.62,0.81],11); // River Crouch default
+L.control.zoom({position:'topleft'}).addTo(map);
+L.control.scale({imperial:false,position:'bottomleft'}).addTo(map);
+const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'© Esri'});
+const seamarks=L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png',{maxZoom:18,attribution:'© OpenSeaMap'});
+osm.addTo(map);seamarks.addTo(map);
+$('lChart').onclick=()=>{map.removeLayer(sat);osm.addTo(map);seamarks.bringToFront();closePanels();};
+$('lSat').onclick=()=>{map.removeLayer(osm);sat.addTo(map);seamarks.bringToFront();closePanels();};
+
+/* ================= panels & rail ================= */
+const panels=['pRoute','pAnchor','pLayers','pMob'];
+function closePanels(){panels.forEach(p=>$(p).classList.remove('open'));}
+function openPanel(id){closePanels();$(id).classList.add('open');}
+document.querySelectorAll('.x').forEach(x=>x.onclick=()=>$(x.dataset.close).classList.remove('open'));
+$('btnLayers').onclick=()=>$('pLayers').classList.contains('open')?closePanels():openPanel('pLayers');
+$('btnNight').onclick=function(){document.body.classList.toggle('night');this.classList.toggle('on');};
+
+/* ================= GPS ================= */
+let here=null,lastFix=null,follow=true,boat=null;
+const boatIcon=heading=>L.divIcon({className:'boaticon',iconSize:[34,34],iconAnchor:[17,17],
+  html:`<svg width="34" height="34" viewBox="0 0 34 34" style="transform:rotate(${heading}deg)">
+    <path d="M17 3 L25 27 L17 22 L9 27 Z" fill="#35C4DC" stroke="#0A1620" stroke-width="1.5"/></svg>`});
+let cog=0;
+function onFix(p){
+  const lat=p.coords.latitude,lng=p.coords.longitude;
+  const pt={lat,lng};
+  const spdKn=p.coords.speed!=null?p.coords.speed*1.94384:(lastFix?distM(lastFix.pt,pt)/((p.timestamp-lastFix.t)/1000)*1.94384:0);
+  if(p.coords.heading!=null&&!isNaN(p.coords.heading)&&spdKn>0.5)cog=p.coords.heading;
+  else if(lastFix&&spdKn>0.5)cog=brg(lastFix.pt,pt);
+  here=pt;lastFix={pt,t:p.timestamp};
+  $('fixdot').className='ok';$('fixtxt').textContent='GPS fix';
+  $('iSog').textContent=(spdKn>0&&isFinite(spdKn)?spdKn:0).toFixed(1);
+  $('iCog').textContent=fmtBrg(cog);
+  const[a,b]=fmtPos(lat,lng);$('iPos').innerHTML=a+'<br>'+b;
+  if(!boat){boat=L.marker(pt,{icon:boatIcon(cog),zIndexOffset:1000}).addTo(map);map.setView(pt,14);}
+  else{boat.setLatLng(pt);boat.setIcon(boatIcon(cog));}
+  if(follow)map.panTo(pt,{animate:true});
+  tickTrack(pt);tickAnchor(pt);tickMob(pt);
+}
+function onGpsErr(e){$('fixdot').className='';$('fixtxt').textContent='No GPS';
+  if(e.code===1)toast('Location permission denied — enable it to see your boat.');}
+if(navigator.geolocation)navigator.geolocation.watchPosition(onFix,onGpsErr,{enableHighAccuracy:true,maximumAge:2000,timeout:15000});
+else toast('Geolocation not supported on this device.');
+$('btnLoc').onclick=function(){follow=!follow;this.classList.toggle('on',follow);if(follow&&here)map.setView(here,Math.max(map.getZoom(),13));};
+$('btnLoc').classList.add('on');
+map.on('dragstart',()=>{follow=false;$('btnLoc').classList.remove('on');});
+
+/* clock */
+setInterval(()=>{const d=new Date();$('clock').textContent=d.toTimeString().slice(0,5);},1000);
+
+/* ================= tap inspect (range & bearing) ================= */
+map.on('click',e=>{
+  if(routeMode){addWp(e.latlng);return;}
+  const[a,b]=fmtPos(e.latlng.lat,e.latlng.lng);
+  let html=a+'<br>'+b;
+  if(here)html+=`<br>RNG <b>${distNM(here,e.latlng).toFixed(2)} NM</b> · BRG <b>${fmtBrg(brg(here,e.latlng))}</b>`;
+  L.popup().setLatLng(e.latlng).setContent(html).openOn(map);
+});
+
+/* ================= ROUTE ================= */
+let routeMode=false,wps=[],wpMarkers=[],routeLine=null;
+$('chipRoute').onclick=function(){routeMode=!routeMode;this.classList.toggle('on',routeMode);
+  routeMode?openPanel('pRoute'):$('pRoute').classList.remove('open');};
+function addWp(ll){wps.push(ll);drawRoute();}
+function drawRoute(){
+  wpMarkers.forEach(m=>map.removeLayer(m));wpMarkers=[];
+  if(routeLine){map.removeLayer(routeLine);routeLine=null;}
+  wps.forEach((ll,i)=>{
+    const m=L.marker(ll,{draggable:true,icon:L.divIcon({className:'',iconSize:[20,20],iconAnchor:[10,10],
+      html:`<div class="wpicon">${i+1}</div>`})}).addTo(map);
+    m.on('drag',e=>{wps[i]=e.target.getLatLng();updateRouteLine();});
+    m.on('dragend',()=>drawRoute());
+    wpMarkers.push(m);
+  });
+  if(wps.length>1)routeLine=L.polyline(wps,{color:'#F5B84C',weight:3,dashArray:'8 6'}).addTo(map);
+  updateRouteStats();
+}
+function updateRouteLine(){if(routeLine)routeLine.setLatLngs(wps);updateRouteStats();}
+function updateRouteStats(){
+  let tot=0,legs='';
+  for(let i=1;i<wps.length;i++){const d=distNM(wps[i-1],wps[i]);tot+=d;
+    legs+=`WP${i}→${i+1}  <b>${d.toFixed(2)} NM</b>  ${fmtBrg(brg(wps[i-1],wps[i]))}<br>`;}
+  $('rDist').textContent=tot.toFixed(1)+' NM';
+  $('rLegs').innerHTML=legs||'Tap the chart to drop waypoints. Drag to adjust.';
+  const spd=parseFloat($('rSpd').value)||1;
+  if(tot>0){const h=tot/spd;const hh=Math.floor(h),mm=Math.round((h-hh)*60);
+    $('rEta').textContent=`${hh}h ${String(mm).padStart(2,'0')}m`;}
+  else $('rEta').textContent='—';
+}
+$('rSpd').oninput=updateRouteStats;
+$('rUndo').onclick=()=>{wps.pop();drawRoute();};
+$('rClear').onclick=()=>{wps=[];drawRoute();};
+$('rSave').onclick=()=>{if(!wps.length)return toast('No waypoints to save.');
+  $('rSaveRow').style.display='flex';$('rName').focus();};
+$('rSaveGo').onclick=async()=>{
+  const name=($('rName').value||'Route '+new Date().toLocaleDateString()).trim();
+  const idx=(await load('routes-index'))||[];
+  const key='route-'+Date.now();
+  idx.push({key,name,n:wps.length});
+  await store(key,wps.map(p=>[p.lat,p.lng]));await store('routes-index',idx);
+  $('rSaveRow').style.display='none';$('rName').value='';toast('Route saved: '+name);};
+$('rLoad').onclick=async()=>{
+  const box=$('rSavedList');const idx=(await load('routes-index'))||[];
+  if(box.style.display==='block'){box.style.display='none';return;}
+  box.innerHTML=idx.length?'':'<div class="leglist">No saved routes yet.</div>';
+  idx.forEach(r=>{
+    const d=document.createElement('div');d.className='saved';
+    d.innerHTML=`<span>${r.name} <span style="color:var(--label)">(${r.n} wp)</span></span>
+      <span class="mini"><button data-a="go">Load</button><button data-a="del">✕</button></span>`;
+    d.querySelector('[data-a=go]').onclick=async()=>{const pts=await load(r.key);
+      if(pts){wps=pts.map(p=>L.latLng(p[0],p[1]));drawRoute();map.fitBounds(L.latLngBounds(wps).pad(.2));box.style.display='none';}};
+    d.querySelector('[data-a=del]').onclick=async()=>{
+      const nidx=idx.filter(x=>x.key!==r.key);await store('routes-index',nidx);
+      try{await window.storage.delete(r.key)}catch(e){};d.remove();};
+    box.appendChild(d);
+  });
+  box.style.display='block';
+};
+
+/* ================= TRACK ================= */
+let tracking=false,trackPts=[],trackLine=null;
+$('chipTrack').onclick=function(){tracking=!tracking;this.classList.toggle('on',tracking);
+  if(tracking){trackPts=here?[here]:[];trackLine=L.polyline(trackPts,{color:'#4CD98A',weight:2.5,opacity:.85}).addTo(map);toast('Recording track');}
+  else{toast('Track stopped — '+(trackLen()).toFixed(2)+' NM logged');}};
+function tickTrack(pt){if(!tracking)return;
+  const last=trackPts[trackPts.length-1];
+  if(!last||distM(last,pt)>6){trackPts.push(L.latLng(pt.lat,pt.lng));trackLine.setLatLngs(trackPts);}}
+function trackLen(){let t=0;for(let i=1;i<trackPts.length;i++)t+=distNM(trackPts[i-1],trackPts[i]);return t;}
+
+/* ================= ANCHOR WATCH ================= */
+let anchorPt=null,anchorCircle=null,anchorMk=null,alarmOn=false,audioCtx=null,alarmInt=null;
+$('chipAnchor').onclick=()=>$('pAnchor').classList.contains('open')?closePanels():openPanel('pAnchor');
+$('aRad').oninput=function(){$('aRadTxt').textContent=this.value+' m';
+  if(anchorCircle)anchorCircle.setRadius(+this.value);};
+$('aSet').onclick=()=>{
+  if(!here)return toast('No GPS fix yet.');
+  anchorPt=L.latLng(here.lat,here.lng);
+  if(anchorCircle)map.removeLayer(anchorCircle);
+  if(anchorMk)map.removeLayer(anchorMk);
+  anchorCircle=L.circle(anchorPt,{radius:+$('aRad').value,color:'#FF4F58',weight:2,fillOpacity:.08}).addTo(map);
+  anchorMk=L.marker(anchorPt,{icon:L.divIcon({className:'',iconSize:[16,16],iconAnchor:[8,8],
+    html:'<div style="width:16px;height:16px;border-radius:50%;background:#FF4F58;border:2px solid #fff"></div>'})}).addTo(map);
+  $('chipAnchor').classList.add('on');toast('Anchor watch armed');};
+$('aOff').onclick=()=>{anchorPt=null;stopAlarm();
+  if(anchorCircle){map.removeLayer(anchorCircle);anchorCircle=null;}
+  if(anchorMk){map.removeLayer(anchorMk);anchorMk=null;}
+  $('chipAnchor').classList.remove('on');$('aDrift').textContent='—';};
+function tickAnchor(pt){if(!anchorPt)return;
+  const d=distM(anchorPt,pt);$('aDrift').textContent=Math.round(d)+' m';
+  if(d>+$('aRad').value)startAlarm();else stopAlarm();}
+function beep(){try{
+  if(!audioCtx)audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+  o.type='square';o.frequency.value=880;g.gain.value=.15;
+  o.connect(g);g.connect(audioCtx.destination);o.start();o.stop(audioCtx.currentTime+.25);}catch(e){}}
+function startAlarm(){if(alarmOn)return;alarmOn=true;$('alarmflash').style.display='block';
+  beep();alarmInt=setInterval(beep,700);toast('⚠ DRAGGING ANCHOR',4000);}
+function stopAlarm(){if(!alarmOn)return;alarmOn=false;$('alarmflash').style.display='none';clearInterval(alarmInt);}
+
+/* ================= MOB ================= */
+let mobPt=null,mobMk=null,mobTime=null;
+$('btnMob').onclick=()=>{
+  if(!here)return toast('No GPS fix yet.');
+  mobPt=L.latLng(here.lat,here.lng);mobTime=new Date();
+  if(mobMk)map.removeLayer(mobMk);
+  mobMk=L.marker(mobPt,{icon:L.divIcon({className:'',iconSize:[22,22],iconAnchor:[11,11],html:'<div class="mobicon"></div>'}),zIndexOffset:2000}).addTo(map);
+  $('mTime').textContent=mobTime.toTimeString().slice(0,8);
+  openPanel('pMob');beep();toast('MOB MARKED — range & bearing live',4000);};
+function tickMob(pt){if(!mobPt)return;
+  $('mRange').textContent=distNM(pt,mobPt).toFixed(2)+' NM ('+Math.round(distM(pt,mobPt))+' m)';
+  $('mBrg').textContent=fmtBrg(brg(pt,mobPt));}
+$('mClear').onclick=()=>{mobPt=null;if(mobMk){map.removeLayer(mobMk);mobMk=null;}closePanels();};
+
+/* restore last speed setting */
+(async()=>{const s=await load('cruise-speed');if(s)$('rSpd').value=s;})();
+$('rSpd').addEventListener('change',()=>store('cruise-speed',$('rSpd').value));
+</script>
+</body>
+</html>
