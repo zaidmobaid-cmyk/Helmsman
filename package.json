@@ -1,0 +1,10 @@
+{
+  "name": "helmsman",
+  "version": "1.0.0",
+  "main": "App.js",
+  "dependencies": {
+    "react-native-maps": "*",
+    "expo-location": "*",
+    "@react-native-async-storage/async-storage": "*"
+  }
+}
